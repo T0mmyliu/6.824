@@ -78,15 +78,18 @@ type Raft struct {
 	// state for leader
 	nextIndex  []int
 	matchIndex []int
+
+	//
+	electionTimeout int
+	heartbeatQuitCh chan bool
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
-	// Your code here (2A).
+	var term int = rf.curTerm
+	var isleader bool = rf.identity == Leader
 	return term, isleader
 }
 
@@ -159,6 +162,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.curTerm < args.CurTerm {
 		rf.votedFor = args.PeerIndex
 		rf.curTerm = args.CurTerm
+		rf.electionTimeout = GenLeaderElectionTimeout()
 		reply.CurTerm = rf.curTerm
 		reply.IsAccept = true
 		reply.PeerIndex = rf.me
@@ -197,9 +201,27 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	fmt.Println(strconv.Itoa(args.CurTerm))
-	fmt.Println(strconv.Itoa(reply.CurTerm))
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+type HeartbeatArgs struct {
+	Term int
+}
+
+type HeartbeatReply struct {
+}
+
+func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
+	if args.Term > rf.curTerm {
+		rf.curTerm = args.Term
+		rf.identity = Follower
+		rf.heartbeatQuitCh <- true
+	}
+	rf.electionTimeout = GenLeaderElectionTimeout()
+}
+func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatReply) bool {
+	ok := rf.peers[server].Call("Raft.Heartbeat", args, reply)
 	return ok
 }
 
@@ -241,12 +263,12 @@ func GenLeaderElectionTimeout() int {
 	return 300 + rand.Intn(300)
 }
 
-func LeaderElectionFunc(rf *Raft, timeout *int) {
-	*timeout = GenLeaderElectionTimeout()
+func LeaderElectionFunc(rf *Raft) {
+	rf.electionTimeout = GenLeaderElectionTimeout()
 	for {
 		time.Sleep(10 * time.Millisecond)
-		*timeout -= 10
-		if *timeout <= 0 {
+		rf.electionTimeout -= 10
+		if rf.electionTimeout <= 0 {
 			fmt.Println("timeout, start election! candidate " + strconv.Itoa(rf.me))
 			rf.identity = Candidate
 			voteCnt := 0
@@ -266,14 +288,32 @@ func LeaderElectionFunc(rf *Raft, timeout *int) {
 			}
 
 			if voteCnt > len(rf.peers)/2 {
-				fmt.Println(strconv.Itoa(rf.me) + " win!")
+				fmt.Println(strconv.Itoa(rf.me) + " win! term: " + strconv.Itoa(rf.curTerm))
 				rf.identity = Leader
+				go HeartbeatFunc(rf)
 			} else {
-				fmt.Println(strconv.Itoa(rf.me) + " lose!")
+				fmt.Println(strconv.Itoa(rf.me) + " lose! term" + strconv.Itoa(rf.curTerm))
 				rf.identity = Follower
 			}
-			*timeout = GenLeaderElectionTimeout()
+			rf.electionTimeout = GenLeaderElectionTimeout()
 
+		}
+	}
+}
+
+func HeartbeatFunc(rf *Raft) {
+	for {
+		select {
+		case <-rf.heartbeatQuitCh:
+			fmt.Println("node:" + strconv.Itoa(rf.me) + " stop heartbeat")
+			return
+		default:
+			time.Sleep(120 * time.Millisecond)
+			for i := 0; i < len(rf.peers); i++ {
+				args := &HeartbeatArgs{rf.curTerm}
+				reply := &HeartbeatReply{}
+				rf.sendHeartbeat(i, args, reply)
+			}
 		}
 	}
 }
@@ -306,8 +346,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// init background goroutine
-	electionTimeout := 0
-	go LeaderElectionFunc(rf, &electionTimeout)
+	rf.electionTimeout = 0
+	go LeaderElectionFunc(rf)
 
 	return rf
 }
