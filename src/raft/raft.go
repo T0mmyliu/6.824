@@ -133,8 +133,8 @@ func (rf *Raft) readPersist(data []byte) {
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	peerIndex int
-	curTerm   int
+	PeerIndex int
+	CurTerm   int
 }
 
 //
@@ -142,17 +142,29 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	curTerm   int
-	peerIndex int
-	isAccept  bool
+	CurTerm   int
+	PeerIndex int
+	IsAccept  bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	if args == nil {
+		fmt.Println("???")
+	}
 	fmt.Println("node: " + strconv.Itoa(rf.me) + " receive vote request")
 
+	if rf.curTerm < args.CurTerm {
+		rf.votedFor = args.PeerIndex
+		rf.curTerm = args.CurTerm
+		reply.CurTerm = rf.curTerm
+		reply.IsAccept = true
+		reply.PeerIndex = rf.me
+	} else {
+		reply.IsAccept = false
+	}
 }
 
 //
@@ -185,6 +197,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	fmt.Println(strconv.Itoa(args.CurTerm))
+	fmt.Println(strconv.Itoa(reply.CurTerm))
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -233,14 +247,31 @@ func LeaderElectionFunc(rf *Raft, timeout *int) {
 		time.Sleep(10 * time.Millisecond)
 		*timeout -= 10
 		if *timeout <= 0 {
+			fmt.Println("timeout, start election! candidate " + strconv.Itoa(rf.me))
+			rf.identity = Candidate
+			voteCnt := 0
 			rf.curTerm++
 			args := &RequestVoteArgs{rf.me, rf.curTerm}
 			//TODO: follower -> candidate
 			for i := 0; i < len(rf.peers); i++ {
-				reply := &RequestVoteReply{}
+				if i == rf.me {
+					voteCnt++
+					continue
+				}
+				reply := &RequestVoteReply{0, 0, false}
 				rf.sendRequestVote(i, args, reply)
+				if reply.IsAccept {
+					voteCnt++
+				}
 			}
-			fmt.Println("election timeout")
+
+			if voteCnt > len(rf.peers)/2 {
+				fmt.Println(strconv.Itoa(rf.me) + " win!")
+				rf.identity = Leader
+			} else {
+				fmt.Println(strconv.Itoa(rf.me) + " lose!")
+				rf.identity = Follower
+			}
 			*timeout = GenLeaderElectionTimeout()
 
 		}
