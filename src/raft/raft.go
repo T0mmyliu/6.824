@@ -80,14 +80,14 @@ type Raft struct {
 	matchIndex []int
 
 	//
-	electionTimeout int
-	heartbeatQuitCh chan bool
+	electionTimeout      int
+	heartbeatQuitCh      chan bool
+	leaderElectionQuitCh chan bool
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int = rf.curTerm
 	var isleader bool = rf.identity == Leader
 	return term, isleader
@@ -154,19 +154,23 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	if args == nil {
-		fmt.Println("???")
-	}
 	fmt.Println("node: " + strconv.Itoa(rf.me) + " receive vote request")
 
 	if rf.curTerm < args.CurTerm {
+		if rf.identity == Leader {
+			rf.identity = Follower
+			rf.heartbeatQuitCh <- true
+			go LeaderElectionFunc(rf)
+		}
 		rf.votedFor = args.PeerIndex
 		rf.curTerm = args.CurTerm
 		rf.electionTimeout = GenLeaderElectionTimeout()
 		reply.CurTerm = rf.curTerm
 		reply.IsAccept = true
 		reply.PeerIndex = rf.me
+		fmt.Println(strconv.Itoa(rf.me) + " agree " + strconv.Itoa(args.PeerIndex) + " term " + strconv.Itoa(args.CurTerm))
 	} else {
+		fmt.Println(strconv.Itoa(rf.me) + " rej " + strconv.Itoa(args.PeerIndex) + "args term " + strconv.Itoa(args.CurTerm) + " cur term:" + strconv.Itoa(rf.curTerm))
 		reply.IsAccept = false
 	}
 }
@@ -201,12 +205,30 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+	fmt.Println(strconv.Itoa(rf.me) + " send to " + strconv.Itoa(server))
+	finish := make(chan bool)
+	go func() {
+		rf.peers[server].Call("Raft.RequestVote", args, reply)
+		finish <- true
+	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		fmt.Println("send vote timeout." + strconv.Itoa(rf.me) + " send to " + strconv.Itoa(server))
+		reply.IsAccept = false
+		finish <- true
+	}()
+	select {
+	case <-finish:
+		return true
+	default:
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
 
 type HeartbeatArgs struct {
-	Term int
+	Term      int
+	PeerIndex int
 }
 
 type HeartbeatReply struct {
@@ -214,10 +236,14 @@ type HeartbeatReply struct {
 
 func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
 	if args.Term > rf.curTerm {
+		fmt.Println(strconv.Itoa(args.Term) + " " + strconv.Itoa(rf.curTerm) + " " + strconv.Itoa(rf.identity))
+		if rf.identity == Leader {
+			rf.identity = Follower
+			rf.heartbeatQuitCh <- true
+		}
 		rf.curTerm = args.Term
-		rf.identity = Follower
-		rf.heartbeatQuitCh <- true
 	}
+	fmt.Println("receive heartbeat from " + strconv.Itoa(args.PeerIndex))
 	rf.electionTimeout = GenLeaderElectionTimeout()
 }
 func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatReply) bool {
@@ -256,7 +282,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	// Your code here, if desired.
+	fmt.Println("try to kill " + strconv.Itoa(rf.me))
+	if rf.identity == Leader {
+		rf.heartbeatQuitCh <- true
+	}
+	rf.leaderElectionQuitCh <- true
 }
 
 func GenLeaderElectionTimeout() int {
@@ -266,37 +296,49 @@ func GenLeaderElectionTimeout() int {
 func LeaderElectionFunc(rf *Raft) {
 	rf.electionTimeout = GenLeaderElectionTimeout()
 	for {
-		time.Sleep(10 * time.Millisecond)
-		rf.electionTimeout -= 10
-		if rf.electionTimeout <= 0 {
-			fmt.Println("timeout, start election! candidate " + strconv.Itoa(rf.me))
-			rf.identity = Candidate
-			voteCnt := 0
-			rf.curTerm++
-			args := &RequestVoteArgs{rf.me, rf.curTerm}
-			//TODO: follower -> candidate
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					voteCnt++
-					continue
-				}
-				reply := &RequestVoteReply{0, 0, false}
-				rf.sendRequestVote(i, args, reply)
-				if reply.IsAccept {
-					voteCnt++
-				}
-			}
-
-			if voteCnt > len(rf.peers)/2 {
-				fmt.Println(strconv.Itoa(rf.me) + " win! term: " + strconv.Itoa(rf.curTerm))
-				rf.identity = Leader
-				go HeartbeatFunc(rf)
+		select {
+		case <-rf.leaderElectionQuitCh:
+			fmt.Println("quit leader election")
+			return
+		default:
+			time.Sleep(10 * time.Millisecond)
+			if rf.identity != Leader {
+				fmt.Println("node:" + strconv.Itoa(rf.me) + " timeout:" + strconv.Itoa(rf.electionTimeout))
+				rf.electionTimeout -= 10
 			} else {
-				fmt.Println(strconv.Itoa(rf.me) + " lose! term" + strconv.Itoa(rf.curTerm))
-				rf.identity = Follower
+				fmt.Println("leader " + strconv.Itoa(rf.me) + " didn't decrement")
 			}
-			rf.electionTimeout = GenLeaderElectionTimeout()
+			if rf.electionTimeout <= 0 {
+				fmt.Println(strconv.Itoa(rf.me) + " timeout, start election! candidate " + strconv.Itoa(rf.me))
+				rf.identity = Candidate
+				voteCnt := 0
+				rf.curTerm++
+				args := &RequestVoteArgs{rf.me, rf.curTerm}
+				//TODO: follower -> candidate
+				for i := 0; i < len(rf.peers); i++ {
+					if i == rf.me {
+						voteCnt++
+						continue
+					}
+					reply := &RequestVoteReply{0, 0, false}
 
+					rf.sendRequestVote(i, args, reply)
+					if reply.IsAccept {
+						voteCnt++
+					}
+				}
+
+				if voteCnt > len(rf.peers)/2 {
+					fmt.Println(strconv.Itoa(rf.me) + " win! term: " + strconv.Itoa(rf.curTerm))
+					rf.identity = Leader
+					go HeartbeatFunc(rf)
+				} else {
+					fmt.Println(strconv.Itoa(rf.me) + " lose! term: " + strconv.Itoa(rf.curTerm))
+					rf.identity = Follower
+				}
+				rf.electionTimeout = GenLeaderElectionTimeout()
+
+			}
 		}
 	}
 }
@@ -308,9 +350,10 @@ func HeartbeatFunc(rf *Raft) {
 			fmt.Println("node:" + strconv.Itoa(rf.me) + " stop heartbeat")
 			return
 		default:
+			fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
 			time.Sleep(120 * time.Millisecond)
 			for i := 0; i < len(rf.peers); i++ {
-				args := &HeartbeatArgs{rf.curTerm}
+				args := &HeartbeatArgs{rf.curTerm, rf.me}
 				reply := &HeartbeatReply{}
 				rf.sendHeartbeat(i, args, reply)
 			}
@@ -347,6 +390,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// init background goroutine
 	rf.electionTimeout = 0
+	rf.heartbeatQuitCh = make(chan bool)
+	rf.leaderElectionQuitCh = make(chan bool)
 	go LeaderElectionFunc(rf)
 
 	return rf
