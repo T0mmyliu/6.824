@@ -50,6 +50,12 @@ const (
 	Leader    = 2
 )
 
+type Log struct {
+	Commnad interface{}
+	Index   int
+	Term    int
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -66,7 +72,7 @@ type Raft struct {
 	// persistent state
 	curTerm  int
 	votedFor int
-	// TODO: log[]
+	log      []Log
 
 	// volatile state
 	commitIndex int
@@ -83,6 +89,8 @@ type Raft struct {
 	electionTimeout      int
 	heartbeatQuitCh      chan bool
 	leaderElectionQuitCh chan bool
+	applyQuitCh          chan bool
+	applyCh              chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -227,11 +235,17 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 type HeartbeatArgs struct {
-	Term      int
-	PeerIndex int
+	Term         int
+	PeerIndex    int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []Log
+	LeaderCommit int
 }
 
 type HeartbeatReply struct {
+	Term    int
+	Success bool
 }
 
 func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
@@ -243,12 +257,48 @@ func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
 		}
 		rf.curTerm = args.Term
 	}
-	fmt.Println("receive heartbeat from " + strconv.Itoa(args.PeerIndex))
+	//fmt.Println("receive heartbeat from " + strconv.Itoa(args.PeerIndex))
 	rf.electionTimeout = GenLeaderElectionTimeout()
 }
+
 func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatReply) bool {
 	ok := rf.peers[server].Call("Raft.Heartbeat", args, reply)
 	return ok
+}
+
+func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
+	if args.PrevLogIndex != args.Entries[0].Index {
+		reply.Success = false
+		return
+	}
+
+	rf.log = append(rf.log, args.Entries[0])
+	reply.Success = true
+	reply.Term = rf.curTerm
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *HeartbeatArgs, reply *HeartbeatReply) {
+	rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return
+}
+
+type CommitArgs struct {
+	Index int
+}
+
+type CommitReply struct {
+}
+
+func (rf *Raft) Commit(args *CommitArgs, reply *CommitReply) {
+	rf.commitIndex = args.Index
+	return
+}
+
+func (rf *Raft) sendCommit(server int, commitIndex int) {
+	args := &CommitArgs{commitIndex}
+	reply := &CommitReply{}
+	rf.peers[server].Call("Raft.Commit", args, reply)
+	return
 }
 
 //
@@ -271,6 +321,59 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.identity != Leader {
+		isLeader = false
+	} else {
+
+		term = rf.curTerm
+		isLeader = true
+
+		if rf.nextIndex == nil || len(rf.nextIndex) == 0 {
+			if rf.log == nil || len(rf.log) == 0 {
+				rf.nextIndex = make([]int, len(rf.peers))
+				for i, _ := range rf.nextIndex {
+					rf.nextIndex[i] = 0
+				}
+			} else {
+				rf.nextIndex = make([]int, len(rf.peers))
+				for i, _ := range rf.nextIndex {
+					rf.nextIndex[i] = rf.log[len(rf.log)-1].Index + 1
+				}
+			}
+		}
+		index = rf.nextIndex[rf.me]
+		fmt.Println("wahaha")
+		// TODO:sync log
+		log := Log{command, rf.nextIndex[rf.me], rf.curTerm}
+		rf.log = append(rf.log, log)
+
+		cnt := 0
+		entries := make([]Log, 1)
+		entries = append(entries, log)
+		args := &HeartbeatArgs{rf.curTerm, rf.me, log.Index, log.Term, entries, rf.commitIndex}
+		for i := 0; i < len(rf.peers); i++ {
+			if i == rf.me {
+				continue
+			}
+			reply := &HeartbeatReply{0, false}
+			rf.sendAppendEntries(i, args, reply)
+			if reply.Success {
+				cnt++
+				rf.nextIndex[i]++
+			}
+		}
+
+		if cnt > len(rf.peers)/2 {
+			rf.commitIndex = log.Index
+			// send commit command
+			for i := 0; i < len(rf.peers); i++ {
+				if i == rf.me {
+					continue
+				}
+				rf.sendCommit(i, log.Index)
+			}
+		}
+	}
 
 	return index, term, isLeader
 }
@@ -303,10 +406,10 @@ func LeaderElectionFunc(rf *Raft) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 			if rf.identity != Leader {
-				fmt.Println("node:" + strconv.Itoa(rf.me) + " timeout:" + strconv.Itoa(rf.electionTimeout))
+				//fmt.Println("node:" + strconv.Itoa(rf.me) + " timeout:" + strconv.Itoa(rf.electionTimeout))
 				rf.electionTimeout -= 10
 			} else {
-				fmt.Println("leader " + strconv.Itoa(rf.me) + " didn't decrement")
+				//fmt.Println("leader " + strconv.Itoa(rf.me) + " didn't decrement")
 			}
 			if rf.electionTimeout <= 0 {
 				fmt.Println(strconv.Itoa(rf.me) + " timeout, start election! candidate " + strconv.Itoa(rf.me))
@@ -350,10 +453,10 @@ func HeartbeatFunc(rf *Raft) {
 			fmt.Println("node:" + strconv.Itoa(rf.me) + " stop heartbeat")
 			return
 		default:
-			fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
+			//fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
 			time.Sleep(120 * time.Millisecond)
 			for i := 0; i < len(rf.peers); i++ {
-				args := &HeartbeatArgs{rf.curTerm, rf.me}
+				args := &HeartbeatArgs{rf.curTerm, rf.me, 0, 0, nil, 0}
 				reply := &HeartbeatReply{}
 				rf.sendHeartbeat(i, args, reply)
 			}
@@ -372,6 +475,25 @@ func HeartbeatFunc(rf *Raft) {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
+
+func DoApplyMsg(rf *Raft) {
+	for {
+		select {
+		case <-rf.applyQuitCh:
+			fmt.Println("quit do apply")
+			return
+		default:
+			time.Sleep(1 * time.Millisecond)
+			for rf.commitIndex > rf.lastApplied {
+				log := rf.log[rf.lastApplied+1]
+				applyMsg := ApplyMsg{true, log.Commnad, log.Index}
+				rf.applyCh <- applyMsg
+				rf.lastApplied++
+			}
+		}
+	}
+}
+
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -392,7 +514,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.electionTimeout = 0
 	rf.heartbeatQuitCh = make(chan bool)
 	rf.leaderElectionQuitCh = make(chan bool)
+	rf.applyQuitCh = make(chan bool)
 	go LeaderElectionFunc(rf)
-
+	go DoApplyMsg(rf)
 	return rf
 }
