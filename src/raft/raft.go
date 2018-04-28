@@ -271,7 +271,6 @@ func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
 		reply.Success = false
 		return
 	}
-
 	rf.log = append(rf.log, args.Entries[0])
 	reply.Success = true
 	reply.Term = rf.curTerm
@@ -341,15 +340,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				}
 			}
 		}
-		index = rf.nextIndex[rf.me]
-		fmt.Println("wahaha")
 		// TODO:sync log
 		log := Log{command, rf.nextIndex[rf.me], rf.curTerm}
 		rf.log = append(rf.log, log)
+		rf.nextIndex[rf.me] = log.Index + 1
 
 		cnt := 0
-		entries := make([]Log, 1)
+		entries := make([]Log, 0)
 		entries = append(entries, log)
+
 		args := &HeartbeatArgs{rf.curTerm, rf.me, log.Index, log.Term, entries, rf.commitIndex}
 		for i := 0; i < len(rf.peers); i++ {
 			if i == rf.me {
@@ -367,12 +366,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.commitIndex = log.Index
 			// send commit command
 			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					continue
-				}
 				rf.sendCommit(i, log.Index)
 			}
 		}
+		index = rf.nextIndex[rf.me]
+		fmt.Println(strconv.Itoa(index))
 	}
 
 	return index, term, isLeader
@@ -485,6 +483,7 @@ func DoApplyMsg(rf *Raft) {
 		default:
 			time.Sleep(1 * time.Millisecond)
 			for rf.commitIndex > rf.lastApplied {
+				fmt.Println("do apply msg " + strconv.Itoa(rf.me))
 				log := rf.log[rf.lastApplied+1]
 				applyMsg := ApplyMsg{true, log.Commnad, log.Index}
 				rf.applyCh <- applyMsg
@@ -515,6 +514,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartbeatQuitCh = make(chan bool)
 	rf.leaderElectionQuitCh = make(chan bool)
 	rf.applyQuitCh = make(chan bool)
+	rf.applyCh = applyCh
 	go LeaderElectionFunc(rf)
 	go DoApplyMsg(rf)
 	return rf

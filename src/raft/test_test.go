@@ -101,6 +101,7 @@ func TestBasicAgree2B(t *testing.T) {
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}
+		fmt.Println("here")
 	}
 
 	cfg.end()
