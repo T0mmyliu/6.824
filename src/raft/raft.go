@@ -482,7 +482,9 @@ func DoApplyMsg(rf *Raft) {
 		default:
 			time.Sleep(1 * time.Millisecond)
 			for rf.commitIndex > rf.lastApplied {
-				log := rf.log[rf.lastApplied]
+				fmt.Println(strconv.Itoa(rf.me) + " apply:" + strconv.Itoa(rf.lastApplied+1))
+				fmt.Println(strconv.Itoa(rf.me) + " len:" + strconv.Itoa(len(rf.log)))
+				log := rf.log[rf.lastApplied+1]
 				applyMsg := ApplyMsg{true, log.Commnad, log.Index}
 				rf.applyCh <- applyMsg
 				rf.lastApplied++
@@ -503,6 +505,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.identity = Follower
+
+	foo := Log{0, 0, 0}
+	rf.log = append(rf.log, foo)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
