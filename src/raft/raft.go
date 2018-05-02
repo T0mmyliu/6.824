@@ -144,8 +144,10 @@ func (rf *Raft) readPersist(data []byte) {
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	PeerIndex int
-	CurTerm   int
+	PeerIndex    int
+	CurTerm      int
+	LastLogTerm  int
+	LastLogIndex int
 }
 
 //
@@ -170,12 +172,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.heartbeatQuitCh <- true
 			go LeaderElectionFunc(rf)
 		}
-		rf.votedFor = args.PeerIndex
-		rf.curTerm = args.CurTerm
-		rf.electionTimeout = GenLeaderElectionTimeout()
-		reply.CurTerm = rf.curTerm
-		reply.IsAccept = true
-		reply.PeerIndex = rf.me
+		if rf.log[rf.commitIndex].Term < args.LastLogTerm || rf.log[rf.commitIndex].Term == args.LastLogTerm && rf.log[rf.commitIndex].Index <= args.LastLogIndex {
+			rf.votedFor = args.PeerIndex
+			rf.curTerm = args.CurTerm
+			rf.electionTimeout = GenLeaderElectionTimeout()
+
+			reply.CurTerm = rf.curTerm
+			reply.IsAccept = true
+			reply.PeerIndex = rf.me
+		} else {
+			reply.IsAccept = false
+		}
 		fmt.Println(strconv.Itoa(rf.me) + " agree " + strconv.Itoa(args.PeerIndex) + " term " + strconv.Itoa(args.CurTerm))
 	} else {
 		fmt.Println(strconv.Itoa(rf.me) + " rej " + strconv.Itoa(args.PeerIndex) + "args term " + strconv.Itoa(args.CurTerm) + " cur term:" + strconv.Itoa(rf.curTerm))
@@ -479,7 +486,7 @@ func LeaderElectionFunc(rf *Raft) {
 				rf.identity = Candidate
 				voteCnt := 0
 				rf.curTerm++
-				args := &RequestVoteArgs{rf.me, rf.curTerm}
+				args := &RequestVoteArgs{rf.me, rf.curTerm, rf.log[rf.commitIndex].Term, rf.log[rf.commitIndex].Index}
 				//TODO: follower -> candidate
 				for i := 0; i < len(rf.peers); i++ {
 					if i == rf.me {
