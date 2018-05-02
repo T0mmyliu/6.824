@@ -262,8 +262,22 @@ func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
 }
 
 func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatReply) bool {
-	ok := rf.peers[server].Call("Raft.Heartbeat", args, reply)
-	return ok
+	finish := make(chan bool)
+	go func() {
+		rf.peers[server].Call("Raft.Heartbeat", args, reply)
+		finish <- true
+	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		finish <- true
+	}()
+	select {
+	case <-finish:
+		return true
+	default:
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
 
 func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
@@ -277,7 +291,22 @@ func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *HeartbeatArgs, reply *HeartbeatReply) {
-	rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	finish := make(chan bool)
+	go func() {
+		rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		finish <- true
+	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		reply.Success = false
+		finish <- true
+	}()
+	select {
+	case <-finish:
+		return
+	default:
+		time.Sleep(5 * time.Millisecond)
+	}
 	return
 }
 
@@ -296,7 +325,23 @@ func (rf *Raft) Commit(args *CommitArgs, reply *CommitReply) {
 func (rf *Raft) sendCommit(server int, commitIndex int) {
 	args := &CommitArgs{commitIndex}
 	reply := &CommitReply{}
-	rf.peers[server].Call("Raft.Commit", args, reply)
+
+	finish := make(chan bool)
+	go func() {
+		rf.peers[server].Call("Raft.Commit", args, reply)
+		finish <- true
+	}()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		finish <- true
+	}()
+	select {
+	case <-finish:
+		return
+	default:
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	return
 }
 
@@ -323,9 +368,26 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.identity != Leader {
 		isLeader = false
 	} else {
-
 		term = rf.curTerm
 		isLeader = true
+
+		// try to catch
+		for i := range rf.nextIndex {
+			for rf.nextIndex[i] < rf.nextIndex[rf.me] {
+				fmt.Println(strconv.Itoa(i) + " should sync log")
+				log := rf.log[rf.nextIndex[i]]
+				entries := make([]Log, 0)
+				entries = append(entries, log)
+				args := &HeartbeatArgs{log.Term, rf.me, log.Index, rf.curTerm, entries, log.Index}
+				reply := &HeartbeatReply{0, false}
+				rf.sendAppendEntries(i, args, reply)
+				if reply.Success {
+					rf.nextIndex[i]++
+				} else {
+					break
+				}
+			}
+		}
 
 		if rf.nextIndex == nil || len(rf.nextIndex) == 0 {
 			if rf.log == nil || len(rf.log) == 0 {
@@ -352,6 +414,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		args := &HeartbeatArgs{rf.curTerm, rf.me, log.Index, log.Term, entries, rf.commitIndex}
 		for i := 0; i < len(rf.peers); i++ {
 			if i == rf.me {
+				cnt++
 				continue
 			}
 			reply := &HeartbeatReply{0, false}
@@ -359,12 +422,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			if reply.Success {
 				cnt++
 				rf.nextIndex[i]++
+			} else {
+				fmt.Println("index:" + strconv.Itoa(log.Index) + " i:" + strconv.Itoa(i) + " fail")
 			}
 		}
-
+		fmt.Println("cnt:" + strconv.Itoa(cnt) + " peers:" + strconv.Itoa(len(rf.peers)))
 		if cnt > len(rf.peers)/2 {
 			rf.commitIndex = log.Index
 			// send commit command
+			fmt.Println("send commit:" + strconv.Itoa(log.Index))
 			for i := 0; i < len(rf.peers); i++ {
 				rf.sendCommit(i, log.Index)
 			}
