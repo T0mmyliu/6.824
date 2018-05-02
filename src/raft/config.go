@@ -19,7 +19,6 @@ import "math/big"
 import "encoding/base64"
 import "time"
 import "fmt"
-import "strconv"
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -362,22 +361,22 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 	cmd := -1
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.applyErr[i] != "" {
-			fmt.Println("123321")
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
 
 		cfg.mu.Lock()
+
 		cmd1, ok := cfg.logs[i][index]
 		cfg.mu.Unlock()
 
 		if ok {
 			if count > 0 && cmd != cmd1 {
-				fmt.Println("??")
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v\n",
 					index, cmd, cmd1)
 			}
 			count += 1
 			cmd = cmd1
+		} else {
 		}
 	}
 	return count, cmd
@@ -442,7 +441,6 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 			cfg.mu.Unlock()
 			if rf != nil {
 				index1, _, ok := rf.Start(cmd)
-				fmt.Println("index:" + strconv.Itoa(index1))
 				if ok {
 					index = index1
 					break
@@ -451,15 +449,12 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 		}
 
 		if index != -1 {
-			fmt.Println("yixixi")
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-
 				if nd > 0 && nd >= expectedServers {
-					fmt.Println("commmmmm")
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
 						// and it was the command we submitted.

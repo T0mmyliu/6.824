@@ -331,7 +331,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			if rf.log == nil || len(rf.log) == 0 {
 				rf.nextIndex = make([]int, len(rf.peers))
 				for i, _ := range rf.nextIndex {
-					rf.nextIndex[i] = 0
+					rf.nextIndex[i] = 1
 				}
 			} else {
 				rf.nextIndex = make([]int, len(rf.peers))
@@ -369,8 +369,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				rf.sendCommit(i, log.Index)
 			}
 		}
-		index = rf.nextIndex[rf.me]
-		fmt.Println(strconv.Itoa(index))
+		index = log.Index
 	}
 
 	return index, term, isLeader
@@ -483,8 +482,7 @@ func DoApplyMsg(rf *Raft) {
 		default:
 			time.Sleep(1 * time.Millisecond)
 			for rf.commitIndex > rf.lastApplied {
-				fmt.Println("do apply msg " + strconv.Itoa(rf.me))
-				log := rf.log[rf.lastApplied+1]
+				log := rf.log[rf.lastApplied]
 				applyMsg := ApplyMsg{true, log.Commnad, log.Index}
 				rf.applyCh <- applyMsg
 				rf.lastApplied++
@@ -502,8 +500,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.curTerm = 0
 	rf.votedFor = -1
-	rf.commitIndex = -1
-	rf.lastApplied = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.identity = Follower
 
 	// initialize from state persisted before a crash
