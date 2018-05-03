@@ -288,6 +288,11 @@ func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatR
 }
 
 func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
+	if args.Term < rf.curTerm {
+		reply.Success = false
+		return
+	}
+
 	if args.PrevLogIndex != args.Entries[0].Index {
 		reply.Success = false
 		return
