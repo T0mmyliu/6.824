@@ -91,6 +91,8 @@ type Raft struct {
 	leaderElectionQuitCh chan bool
 	applyQuitCh          chan bool
 	applyCh              chan ApplyMsg
+
+	identityLock sync.Mutex
 }
 
 // return currentTerm and whether this server
@@ -270,6 +272,7 @@ func (rf *Raft) Heartbeat(args *HeartbeatArgs, reply *HeartbeatReply) {
 
 func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatReply) bool {
 	finish := make(chan bool)
+	//fmt.Println(strconv.Itoa(rf.me) +  " send heartbeat to " + strconv.Itoa(server))
 	go func() {
 		rf.peers[server].Call("Raft.Heartbeat", args, reply)
 		finish <- true
@@ -290,6 +293,9 @@ func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatR
 func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
 	if args.Term < rf.curTerm {
 		reply.Success = false
+		reply.Term = rf.curTerm
+		fmt.Println(strconv.Itoa(rf.me) + " from " + strconv.Itoa(args.PeerIndex) + " is out of date leader")
+
 		return
 	}
 
@@ -306,12 +312,30 @@ func (rf *Raft) sendAppendEntries(server int, args *HeartbeatArgs, reply *Heartb
 	finish := make(chan bool)
 	go func() {
 		rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		rf.identityLock.Lock()
+		fmt.Println("1213123123123123123")
+		if reply.Term > rf.curTerm{
+			fmt.Println("balala")
+			fmt.Println(reply.Success)
+			rf.curTerm = reply.Term
+			fmt.Println("**************************")
+			rf.heartbeatQuitCh <- true
+			fmt.Println("##########################")
+			rf.identity = Follower
+			fmt.Println(strconv.Itoa(rf.me) + " change 2 " + strconv.Itoa(rf.identity))
+			go LeaderElectionFunc(rf)
+		} 
+		fmt.Println("wtf.....")
 		finish <- true
+		rf.identityLock.Unlock()
 	}()
 	go func() {
 		time.Sleep(10 * time.Millisecond)
+		rf.identityLock.Lock()
+		fmt.Println("**(JKLNJLKBNKJHUYU")
 		reply.Success = false
 		finish <- true
+		rf.identityLock.Unlock()
 	}()
 	select {
 	case <-finish:
@@ -401,6 +425,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 		}
 
+		fmt.Println("yiixix")
+		fmt.Println(rf.identity)
+		
+		// check identity again
+		if rf.identity != Leader{
+			isLeader = false
+			fmt.Println("not leader")
+			return index, term, isLeader
+		}
+
 		if rf.nextIndex == nil || len(rf.nextIndex) == 0 {
 			if rf.log == nil || len(rf.log) == 0 {
 				rf.nextIndex = make([]int, len(rf.peers))
@@ -430,10 +464,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				continue
 			}
 			reply := &HeartbeatReply{0, false}
+
 			rf.sendAppendEntries(i, args, reply)
+			fmt.Println(strconv.Itoa(i) + strconv.FormatBool(reply.Success))
 			if reply.Success {
 				cnt++
-				rf.nextIndex[i]++
+				rf.nextIndex[i]++					
+				fmt.Println(strconv.Itoa(i) + " succ")
 			} else {
 				fmt.Println("index:" + strconv.Itoa(log.Index) + " i:" + strconv.Itoa(i) + " fail")
 			}
@@ -528,7 +565,7 @@ func HeartbeatFunc(rf *Raft) {
 			fmt.Println("node:" + strconv.Itoa(rf.me) + " stop heartbeat")
 			return
 		default:
-			//fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
+			fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
 			time.Sleep(120 * time.Millisecond)
 			for i := 0; i < len(rf.peers); i++ {
 				args := &HeartbeatArgs{rf.curTerm, rf.me, 0, 0, nil, 0}
