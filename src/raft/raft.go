@@ -228,17 +228,12 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		rf.peers[server].Call("Raft.RequestVote", args, reply)
 		finish <- true
 	}()
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		fmt.Println("send vote timeout." + strconv.Itoa(rf.me) + " send to " + strconv.Itoa(server))
-		reply.IsAccept = false
-		finish <- true
-	}()
 	select {
 	case <-finish:
 		return true
-	default:
-		time.Sleep(5 * time.Millisecond)
+	case <- time.After(10* time.Millisecond):
+		fmt.Println("send vote timeout." + strconv.Itoa(rf.me) + " send to " + strconv.Itoa(server))
+		reply.IsAccept = false
 	}
 	return true
 }
@@ -277,15 +272,11 @@ func (rf *Raft) sendHeartbeat(server int, args *HeartbeatArgs, reply *HeartbeatR
 		rf.peers[server].Call("Raft.Heartbeat", args, reply)
 		finish <- true
 	}()
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		finish <- true
-	}()
 	select {
 	case <-finish:
 		return true
-	default:
-		time.Sleep(5 * time.Millisecond)
+	case <- time.After(10*time.Millisecond):
+		return true
 	}
 	return true
 }
@@ -312,11 +303,7 @@ func (rf *Raft) sendAppendEntries(server int, args *HeartbeatArgs, reply *Heartb
 	finish := make(chan bool)
 	go func() {
 		rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		rf.identityLock.Lock()
-		fmt.Println("1213123123123123123")
 		if reply.Term > rf.curTerm{
-			fmt.Println("balala")
-			fmt.Println(reply.Success)
 			rf.curTerm = reply.Term
 			fmt.Println("**************************")
 			rf.heartbeatQuitCh <- true
@@ -325,23 +312,15 @@ func (rf *Raft) sendAppendEntries(server int, args *HeartbeatArgs, reply *Heartb
 			fmt.Println(strconv.Itoa(rf.me) + " change 2 " + strconv.Itoa(rf.identity))
 			go LeaderElectionFunc(rf)
 		} 
-		fmt.Println("wtf.....")
 		finish <- true
-		rf.identityLock.Unlock()
-	}()
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		rf.identityLock.Lock()
-		fmt.Println("**(JKLNJLKBNKJHUYU")
-		reply.Success = false
-		finish <- true
-		rf.identityLock.Unlock()
 	}()
 	select {
 	case <-finish:
 		return
-	default:
-		time.Sleep(5 * time.Millisecond)
+	case <-time.After(10*time.Millisecond):
+		fmt.Println(strconv.Itoa(rf.me) + " append entry to " + strconv.Itoa(server)+ " timeout")
+		reply.Success = false
+		return
 	}
 	return
 }
@@ -367,15 +346,12 @@ func (rf *Raft) sendCommit(server int, commitIndex int) {
 		rf.peers[server].Call("Raft.Commit", args, reply)
 		finish <- true
 	}()
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		finish <- true
-	}()
 	select {
 	case <-finish:
 		return
-	default:
-		time.Sleep(5 * time.Millisecond)
+	case <-time.After(10*time.Millisecond):
+		fmt.Println(strconv.Itoa(rf.me) + " commit " + strconv.Itoa(server) + " timeout")
+		return
 	}
 
 	return
@@ -424,10 +400,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				}
 			}
 		}
-
-		fmt.Println("yiixix")
-		fmt.Println(rf.identity)
-		
 		// check identity again
 		if rf.identity != Leader{
 			isLeader = false
@@ -466,11 +438,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			reply := &HeartbeatReply{0, false}
 
 			rf.sendAppendEntries(i, args, reply)
-			fmt.Println(strconv.Itoa(i) + strconv.FormatBool(reply.Success))
 			if reply.Success {
 				cnt++
 				rf.nextIndex[i]++					
-				fmt.Println(strconv.Itoa(i) + " succ")
 			} else {
 				fmt.Println("index:" + strconv.Itoa(log.Index) + " i:" + strconv.Itoa(i) + " fail")
 			}
@@ -565,7 +535,7 @@ func HeartbeatFunc(rf *Raft) {
 			fmt.Println("node:" + strconv.Itoa(rf.me) + " stop heartbeat")
 			return
 		default:
-			fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
+			//fmt.Println(strconv.Itoa(rf.me) + " is sending heartbeat")
 			time.Sleep(120 * time.Millisecond)
 			for i := 0; i < len(rf.peers); i++ {
 				args := &HeartbeatArgs{rf.curTerm, rf.me, 0, 0, nil, 0}
