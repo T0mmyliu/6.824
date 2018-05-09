@@ -286,7 +286,7 @@ func (rf *Raft) AppendEntries(args *HeartbeatArgs, reply *HeartbeatReply) {
 		reply.Success = false
 		reply.Term = rf.curTerm
 		fmt.Println(strconv.Itoa(rf.me) + " from " + strconv.Itoa(args.PeerIndex) + " is out of date leader")
-
+		fmt.Println("leader term:" + strconv.Itoa(args.Term) + " follower:" + strconv.Itoa(rf.curTerm))
 		return
 	}
 
@@ -357,7 +357,6 @@ func (rf *Raft) sendCommit(server int, commitIndex int) {
 	return
 }
 
-//
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -460,7 +459,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-//
 // the tester calls Kill() when a Raft instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
@@ -517,12 +515,13 @@ func LeaderElectionFunc(rf *Raft) {
 					fmt.Println(strconv.Itoa(rf.me) + " win! term: " + strconv.Itoa(rf.curTerm))
 					rf.identity = Leader
 					go HeartbeatFunc(rf)
-				} else {
+				} else if voteCnt * 2 == len(rf.peers){
 					fmt.Println(strconv.Itoa(rf.me) + " lose! term: " + strconv.Itoa(rf.curTerm))
 					rf.identity = Follower
+				} else {
+					rf.curTerm--
 				}
 				rf.electionTimeout = GenLeaderElectionTimeout()
-
 			}
 		}
 	}
